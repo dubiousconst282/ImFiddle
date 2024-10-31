@@ -1,9 +1,5 @@
 #include "Module.h"
 
-#include <dlfcn.h>
-#include <sys/inotify.h>
-#include <unistd.h>
-
 #include <regex>
 #include <fstream>
 
@@ -20,76 +16,70 @@ static std::string ParseCompileCmd(const fs::path& compileCmdJsonPath) {
     // TODO: consider using some actual json parser
     std::string json = ReadFile(compileCmdJsonPath);
 
-    auto re = std::regex(R"!("command": "(.+?)",\s*"file": ".+?[\/\\]Sketches/Template.cpp")!");
+    auto re = std::regex(R"!("command": "(.+?)",\s*"file": ".+?(\/|\\\\)Sketches\2Template\.cpp")!");
 
     auto m = std::sregex_iterator(json.begin(), json.end(), re);
     if (m == std::sregex_iterator()) return "";
 
-    return std::regex_replace(m->str(1), std::regex(R"!(-o .+ -c .+)!"), "");
+    auto res = std::regex_replace(m->str(1), std::regex(R"!(-o .+ -c .+)!"), "");
+    res = std::regex_replace(res, std::regex("\\\\([\\\\|\\\"'])"), "$1"); // unescape shit
+    res = std::regex_replace(res, std::regex("-O\\d?"), ""); // strip opt level
+    return res;
 }
 
-FiddleModule::FiddleModule(const fs::path& sourcePath, const fs::path& compileCmdJsonPath) {
-    _sourcePath = sourcePath;
+FiddleModule::FiddleModule(const fs::path& compileCmdJsonPath) {
     _compileCmd = ParseCompileCmd(compileCmdJsonPath);
 
     if (_compileCmd.empty()) {
         throw std::runtime_error("Failed to parse compile command");
     }
-
-    std::error_code errc;
-    fs::remove_all("/tmp/CppFiddle2D/module_bin/", errc);
-    fs::create_directories("/tmp/CppFiddle2D/module_bin/");
-
-    SetSourcePath(sourcePath);
 }
 
 FiddleModule::~FiddleModule() {
-    close(_watcher);
-}
-
-void FiddleModule::SetSourcePath(const fs::path& path) {
-    _sourcePath = path;
-
-    if (_watcher != 0) {
-        close(_watcher);
-        _watcher = 0;
-    }
-    _watcher = inotify_init1(IN_NONBLOCK);
-    inotify_add_watch(_watcher, path.c_str(), IN_MODIFY);
-    fn_Paint = nullptr;
+    xplat::CloseModule(_modHandle);
 }
 
 void FiddleModule::InvokePaint(ImDrawList* drawList) {
-    char buffer[512];
+    if (SourcePath.empty()) return;
+    auto lastWriteTime = fs::last_write_time(SourcePath);
+    
+    if (!fn_Paint || lastWriteTime != _sourceLastWriteTime) {
+        _sourceLastWriteTime = lastWriteTime;
+        _binPath = fs::temp_directory_path() / ("Fiddle2D/build_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".dll");
 
-    if (!fn_Paint || (read(_watcher, buffer, sizeof(buffer)) > 0 && ImGui::GetTime() >= _lastCompileTime + 0.5)) {
-        _lastCompileTime = ImGui::GetTime(); // throttle a bit because inotify notifies twice in a row
-        _binPath = "/tmp/CppFiddle2D/module_bin/build_" + std::to_string(++_compileId) + ".so";
+        std::error_code errc;
+        fs::remove_all(_binPath.parent_path(), errc);
+        fs::create_directories(_binPath.parent_path());
 
         std::string cmd = _compileCmd;
-        cmd += "-shared -fPIC -o \"";
-        cmd += _binPath;
+
+    #ifdef _WIN32
+        cmd += " -lmsvcrtd";
+        cmd += " -l\"" + xplat::GetCurrentExePath().replace_extension(".lib").string() + "\"";
+    #endif
+
+        cmd += EnableOpts ? " -O2" : " -O0";
+
+        cmd += " -shared -o \"";
+        cmd += _binPath.string();
         cmd += "\" \"";
-        cmd += _sourcePath;
+        cmd += fs::absolute(SourcePath).string();
         cmd += "\"";
 
-        auto proc = popen(cmd.c_str(), "r");
         std::string compileLog = "";
-        while (fgets(buffer, sizeof(buffer), proc)) {
-            compileLog += buffer;
-        }
-        int status = pclose(proc);
+        int32_t status;
+        xplat::RunProcess(cmd, &compileLog, &status);
+
+        printf("%s\n", compileLog.c_str());
 
         if (status != 0) {
-            printf("Compile error: %s\n", compileLog.c_str());
             fn_Paint = nullptr;
         } else {
             if (_modHandle) {
-                dlclose(_modHandle);
+                xplat::CloseModule(_modHandle);
             }
-            _modHandle = dlopen(fs::absolute(_binPath).c_str(), RTLD_NOW | RTLD_GLOBAL);
-            printf("Load: %s\n", dlerror());
-            fn_Paint = (PaintFn)dlsym(_modHandle, "ImFiddle_ModulePaint");
+            _modHandle = xplat::LoadModule(_binPath);
+            fn_Paint = (PaintFn)xplat::FindSym(_modHandle, "ImFiddle_ModulePaint");
         }
         if (!fn_Paint) fn_Paint = [](ImDrawList* drawList) { drawList->AddText(ImVec2(0, 0), 0xFF0000FF, "No module loaded"); };
     }

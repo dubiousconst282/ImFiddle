@@ -8,24 +8,32 @@
 namespace fs = std::filesystem;
 
 struct FiddleModule {
-    FiddleModule(const fs::path& sourcePath, const fs::path& compileCmdJsonPath);
+    FiddleModule(const fs::path& compileCmdJsonPath);
     ~FiddleModule();
 
     void InvokePaint(ImDrawList* drawList);
 
-    const fs::path& GetSourcePath() const { return _sourcePath; }
-    void SetSourcePath(const fs::path& path);
+    fs::path SourcePath;
+    bool EnableOpts = false;
 
 private:
     using PaintFn = void (*)(ImDrawList* drawList);
 
-    fs::path _sourcePath;
     fs::path _binPath;
     std::string _compileCmd;
 
-    int _watcher = 0;  // TODO: reuse havk::FileWatcher
-    void* _modHandle = nullptr;
+    uintptr_t _modHandle = 0;
     PaintFn fn_Paint = nullptr;
-    uint32_t _compileId = 0;
-    double _lastCompileTime = 0;
+    
+    fs::file_time_type _sourceLastWriteTime = {};
+};
+
+namespace xplat {
+    void RunProcess(const std::string& args, std::string* stdOut, int32_t* exitCode);
+    
+    uintptr_t LoadModule(const fs::path& path);
+    void CloseModule(uintptr_t moduleHandle);
+    uintptr_t FindSym(uintptr_t moduleHandle, const char* name);
+
+    fs::path GetCurrentExePath();
 };

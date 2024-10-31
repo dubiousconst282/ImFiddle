@@ -63,17 +63,24 @@ void Line(float2 a, float2 b, float thickness = 1.0f) {
 }
 void Rect(float x, float y, float w, float h, float rounding = 0, float thickness = 1.0f) {
     // FIXME: this won't work with rotatations
-    float2 a = GetTransform(x, y);
-    float2 b = GetTransform(x + w, y + h);
+    ImVec2 a = GetTransform(x, y);
+    ImVec2 b = GetTransform(x + w, y + h);
 
     if (g_FillColor != 0) {
-        g_DrawList->AddRectFilled(ImVec2(a.x, a.y), ImVec2(b.x, b.y), g_FillColor);
+        g_DrawList->AddRectFilled(a, b, g_FillColor);
     }
     if (g_StrokeColor != 0) {
-        g_DrawList->AddRect(ImVec2(a.x, a.y), ImVec2(b.x, b.y), g_StrokeColor, rounding, ImDrawFlags_None, thickness);
+        g_DrawList->AddRect(a, b, g_StrokeColor, rounding, ImDrawFlags_None, thickness);
     }
 }
 void Rect(float2 pos, float2 size, float rounding = 0, float thickness = 1.0f) { Rect(pos.x, pos.y, size.x, size.y, rounding, thickness); }
+
+void TexturedRect(float x, float y, float w, float h, ImTextureID tex) {
+    ImVec2 a = GetTransform(x, y);
+    ImVec2 b = GetTransform(x + w, y + h);
+    g_DrawList->AddImage(tex, a, b);
+}
+void TexturedRect(float2 pos, float2 size, ImTextureID tex) { TexturedRect(pos.x, pos.y, size.x, size.y, tex); }
 
 void Circle(float x, float y, float radius) {
     float2 pos = GetTransform(x, y);
@@ -111,6 +118,12 @@ float2 GetCanvasSize() {
 
 void Paint();
 
+// Creates a temporary texture from a RGBA32 pixel buffer (that is automatically destroyed after painting).
+extern ImTextureID CreateTexture(uint2 size, const uint32_t* pixels, uint32_t pixelsPerRow = 0, bool nolerp = false);
+
+#if _WIN32
+__declspec(dllexport)
+#endif
 extern "C" void ImFiddle_ModulePaint(ImDrawList* drawList) {
     g_DrawList = drawList;
     g_TransformStack.clear();

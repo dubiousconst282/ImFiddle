@@ -1,14 +1,24 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 
-#define IMGUI_DEFINE_MATH_OPERATORS
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
 #include "Module.h"
 
+#include <vector>
+#include <unordered_map>
+
+std::vector<GLuint> _tempTextures;
+
 int main(int argc, char** args) {
+    #if _WIN32
+    setvbuf(stdout, NULL, _IONBF, 0);
+    #else
+    setlinebuf(stdout);
+    #endif
+
     if (!glfwInit()) return -1;
 
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -39,8 +49,9 @@ int main(int argc, char** args) {
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init();
 
-    FiddleModule mod("./ImFiddle/Sketches/Template.cpp", "./build/compile_commands.json");
-
+    FiddleModule mod("./build/compile_commands.json");
+    mod.SourcePath = "./ImFiddle/Sketches/Template.cpp";
+    
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
 
@@ -56,16 +67,18 @@ int main(int argc, char** args) {
         glClear(GL_COLOR_BUFFER_BIT);
 
         if (ImGui::Begin("Fiddle Settings")) {
-            if (ImGui::BeginCombo("Module", mod.GetSourcePath().filename().string().c_str())) {
+            if (ImGui::BeginCombo("Module", mod.SourcePath.filename().string().c_str())) {
                 for (auto& entry : fs::directory_iterator("./ImFiddle/Sketches/")) {
                     if (!entry.is_regular_file()) continue;
                     
-                    if (ImGui::Selectable(entry.path().filename().string().c_str(), mod.GetSourcePath() == entry.path())) {
-                        mod.SetSourcePath(entry.path());
+                    if (ImGui::Selectable(entry.path().filename().string().c_str(), mod.SourcePath == entry.path())) {
+                        mod.SourcePath = entry.path();
                     }
                 }
                 ImGui::EndCombo();
             }
+            ImGui::Checkbox("Optimize", &mod.EnableOpts);
+
             ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
         }
         ImGui::End();
@@ -78,7 +91,32 @@ int main(int argc, char** args) {
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
         glfwSwapBuffers(window);
+
+        if (_tempTextures.size() > 0) {
+            glDeleteTextures(_tempTextures.size(), _tempTextures.data());
+            _tempTextures.clear();
+        }
     }
     glfwTerminate();
     return 0;
 }
+
+ImTextureID CreateTexture(glm::uvec2 size, const uint32_t* pixels, uint32_t pixelsPerRow = 0, bool nolerp = false) {
+    GLuint texId;
+    glGenTextures(1, &texId);
+    glBindTexture(GL_TEXTURE_2D, texId);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, nolerp ? GL_NEAREST : GL_LINEAR);
+
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, pixelsPerRow);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, size.x, size.y, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+
+    _tempTextures.push_back(texId);
+    return (ImTextureID)texId;
+}
+
+std::unordered_map<size_t, std::pair<void*, size_t>> g_SessionData;
+
+extern std::pair<void*, size_t>& ImFiddle_GetPersistData(size_t id) { return g_SessionData[id]; }
